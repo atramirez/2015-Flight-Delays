@@ -2,15 +2,10 @@ library(tidyverse)
 library(sf)
 library(usmap)
 
-setwd('~/code/school/dat301/Project1/data')
+#run as script 1, this performs general cleaning and joins
+#these script will be split up into general topis and be more specific towards the end for readability nd navigation
 
-#prelim questions
-#where are all the airports in this set
-#what carrier has the worst delays
-#what airports have the worst delays, regions, why?
-#what airport has the most flights, delay ratio?
-#are longer routes worse for delays than short ones?
-#What is the average overall delays and why?
+setwd('~/code/school/dat301/Project1/data')
 
 flightsdf = read_csv("https://www.kaggle.com/usdot/flight-delays?select=flights.csv")
 airportsdf = read_csv("https://www.kaggle.com/usdot/flight-delays?select=airports.csv")
