@@ -1,0 +1,309 @@
+---
+title: "2015 Flights"
+author: "atramirez"
+date: "10/28/2021"
+output: ioslides_presentation
+widescreen: true
+smaller: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+#file download link in readme
+library(tidyverse)
+library(sf)
+library(tmap)
+
+flightsdf = read_csv("flights.csv")
+airportsdf = read_csv("airports.csv")
+airlinesdf = read_csv("airlines.csv")
+```
+
+## Quick About Me and Why This
+
+- Hi, I'm Aden
+- Interested heavily in Aviation, Space, this is my element
+- I love database design and warehousing
+- Our current commercial aviation is a logistic nightmare, often delays
+- Seeing how a breakdown happens secondhand from SWA systems breaking
+
+## Goals and Hopeful Outcomes
+
+- I started this with some basic questions to get the ball rolling
+- Understand what this set includes (3 Tables)
+- Understand trends around the country for delay times and reasons
+- What airports have the worst delays? What about on average?
+- What are the most busy airports, how do they compare to the nation?
+
+## One Last Thing
+- I will throw around some abbreviation
+- IATA (International Air Transportation Association) basically for trade on creation
+though their codes are everywhere (PHX is an IATA code)
+- FAA (Federal Aviation Administration) 
+- I used FAA delay definition for most analysis, I will make it clear
+
+## The Data
+- Here we go, sourced my data from Kaggle, 3 tables (flights, airlines, airports)
+- Airlines, basically holds names for IATA codes for airlines
+- Airports, holds IATA codes (pk in this case), City, State, Country, Lat, Long
+- Flights is the meat contains all our flight data, numbers, airline, origin, dest.
+tail nums, schedules, alot of my edits, alot of data 
+
+--- 
+<img src="tables.png" alt="drawing" style="width:450px;"/>
+
+## Summary
+```{r, include=TRUE}
+summary(flightsdf[,c("DEPARTURE_DELAY", "ARRIVAL_DELAY", "AIR_SYSTEM_DELAY",
+                     "SECURITY_DELAY", "AIRLINE_DELAY", "LATE_AIRCRAFT_DELAY",
+                     "WEATHER_DELAY")])
+```
+
+## Main Issues
+- Lots of missing values
+- Delays split up, good for some cases, but to start I go more general
+- October has a huge issue not prevalent just yet...
+- I won't realize how big this issue is until later
+- All of October airports (org,dest.) are in FAA unique codes instead of IATA
+```{r, include=TRUE}
+count(flightsdf)
+```
+
+## Cleaning Time!
+- For my use the all the delays that didn't happen being na is not good
+\tiny
+```{r, include=TRUE}
+head(select(flightsdf, FLIGHT_NUMBER, AIR_SYSTEM_DELAY, SECURITY_DELAY,
+               AIRLINE_DELAY, LATE_AIRCRAFT_DELAY, WEATHER_DELAY))
+```
+
+## Cleaning Time!
+- Starting I make this monstrosity to set all my delay NAs to 0
+```{r, include=TRUE}
+flightsdf <- flightsdf %>% filter(MONTH != 10)
+flightsdf <- flightsdf %>% 
+  mutate(AIR_SYSTEM_DELAY = replace(AIR_SYSTEM_DELAY, is.na(AIR_SYSTEM_DELAY), 0)) %>%
+  mutate(SECURITY_DELAY = replace(SECURITY_DELAY, is.na(SECURITY_DELAY), 0)) %>%
+  mutate(AIRLINE_DELAY = replace(AIRLINE_DELAY, is.na(AIRLINE_DELAY), 0)) %>%
+  mutate(LATE_AIRCRAFT_DELAY = replace(LATE_AIRCRAFT_DELAY, is.na(LATE_AIRCRAFT_DELAY), 0)) %>%
+  mutate(WEATHER_DELAY = replace(WEATHER_DELAY, is.na(WEATHER_DELAY), 0))
+after = select(flightsdf, FLIGHT_NUMBER, AIR_SYSTEM_DELAY, SECURITY_DELAY,
+               AIRLINE_DELAY, LATE_AIRCRAFT_DELAY, WEATHER_DELAY)
+head(after)
+```
+
+## Continued
+- I decided to drop any observations with NA departure/arrival time 
+```{r, include=TRUE, echo=TRUE}
+flightsdf <- flightsdf %>% drop_na(DEPARTURE_TIME, ARRIVAL_TIME, ARRIVAL_DELAY)
+airportsdf <- airportsdf %>% drop_na(LATITUDE, LONGITUDE)
+#post initial clean count
+count(flightsdf)
+```
+- With this I think I have a good baseline to start playing around
+- Next I am going to join the tables for later use
+
+## Relational Data
+- As the diagram from earlier I want to join these tables for ease of use
+```{r, include=TRUE, echo=TRUE}
+flightsdf <- flightsdf %>% left_join(airportsdf, by = c("ORIGIN_AIRPORT" = "IATA_CODE"))
+flightsdf <- flightsdf %>% left_join(airportsdf, by = c("DESTINATION_AIRPORT" = "IATA_CODE"))
+flightsdf <- flightsdf %>% left_join(airlinesdf, by = c("AIRLINE" = "IATA_CODE"))
+```
+- Join the airports df to flights df by both the origin and arrival
+- Join the airlines df to flights df by the airline IATA codes that match up
+
+## Overview
+- First I wanted to look at what I am dealing with visually
+- This focuses in on the mainland, there are airports from Guam, AK, etc.
+```{r, include=TRUE, message= FALSE, results='hide'}
+setwd('~/code/school/dat301/Project1/reports')
+`%not_in%` <- purrr::negate(`%in%`)
+
+airportsdf_sf = st_as_sf(airportsdf, coords = c("LONGITUDE", "LATITUDE"), crs = 4269)
+
+#loading in shape file
+state_map = st_read("cb_2018_us_state_500k.shp")
+
+#jus,t mainland U.S
+state_map = filter(state_map, STATEFP %not_in%
+                     c('15','72','02','60','66','69','78'))
+
+#highlight ten airports in red
+#ten_start <- filter(airportsdf_sf, IATA_CODE == c('ORD','DFW', 'DEN','IAH','ATL','LAX','LAS','MSP','PHX','SFO'))
+
+tm_shape(state_map) + tm_fill() + tm_borders() +
+  tm_shape(airportsdf_sf) + tm_symbols(col = "blue", scale=0.5) +
+  #tm_shape(ten_start) + tm_symbols(col = "red", scale=0.5) +
+  tm_layout(title = "Airports in Mainland U.S.",
+            title.position = c("right", "top"))
+
+```
+
+## Busiest Airports 
+- You can see some of what I pointed out at a closer scale
+- Decently distributed through the U.S, this set give a good feel for anaylsis
+- What are the busiest airports now that we know what we are looking at?
+```{r,include=TRUE, message="hide", warning=FALSE}
+#for later
+busy_airports = flightsdf %>% group_by(DESTINATION_AIRPORT) %>% 
+  filter(DESTINATION_AIRPORT == c('ORD','DFW', 'DEN','IAH','ATL','LAX','LAS','MSP','PHX','SFO'))
+
+
+top10_airports <- flightsdf %>% group_by(ORIGIN_AIRPORT) %>% 
+  summarise(airport_count = n())
+top10_airports <- merge(x = airportsdf, y = top10_airports, by.x = 'IATA_CODE',
+                        by.y = 'ORIGIN_AIRPORT') %>%
+  arrange(desc(airport_count))
+total = sum(top10_airports$airport_count)
+top10_airports <- slice_max(top10_airports, top10_airports$airport_count, n=10)
+
+ggplot(data = top10_airports, aes(x = AIRPORT, y = airport_count)) + 
+  theme(axis.text.x = element_blank()) +geom_col(aes(fill = AIRPORT)) +
+  ggtitle("10 Busiest Airports by Flights") +
+  xlab("Airport") + ylab("Flights") + guides(fill=guide_legend(title="Airport"))
+```
+
+## Delays
+- Start generally, we are going to look at delay minutes, including below 15
+- There's 5 causes in this set, lets look at how much each make up 
+```{r, include=TRUE}
+pie_time = c(sum(flightsdf$AIR_SYSTEM_DELAY), sum(flightsdf$SECURITY_DELAY), 
+             sum(flightsdf$AIRLINE_DELAY), sum(flightsdf$LATE_AIRCRAFT_DELAY), 
+             sum(flightsdf$WEATHER_DELAY))
+pie_percent = round(100 * pie_time / sum(pie_time), 1)
+pie(pie_time, labels = pie_percent, main = "Delay Causes", col = rainbow(length(pie_time)))
+legend("topright", c("Air Sys", "Security", "Airline","Late Aircraft", "Weather"), fill = rainbow(length(pie_time)))
+```
+
+## Carrier Delays
+- Total delay minutes by carrier
+- Some of these are smaller airlines there will be an obvious descrepency
+```{r, include=TRUE, results='hide'}
+airline_total_delay = flightsdf %>% group_by(AIRLINE.y) %>% 
+  filter(ARRIVAL_DELAY >= 15) %>% summarize(total_delay_time = sum(ARRIVAL_DELAY))
+
+ggplot(airline_total_delay, aes(x = AIRLINE.y, y = total_delay_time)) + 
+  geom_bar(stat="identity", aes(fill = AIRLINE.y)) +
+  theme(axis.text.x = element_blank()) +
+  ggtitle("Total Delay Minutes by Airline") + ylab("Delay Minutes") +
+  xlab("Airline") 
+```
+
+## Carrier Delays
+- A more interesting look is at carrier delay distributions
+- These are split up by 5 minute chunks
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+#delay minutes by airline
+ggplot(data = flightsdf, aes(x = ARRIVAL_DELAY)) + geom_histogram(aes(fill = AIRLINE), bins=60) + xlim(c(0,300)) + facet_wrap(~AIRLINE.y)
+```       
+
+## Airport Delay Amounts
+```{r, include=TRUE, results='hide', warning=FALSE}
+
+##Breaks??###
+#flightsdf_delays = filter(flightsdf, ARRIVAL_DELAY >= 15)
+#delay_collapsed = gather(flightsdf_delays,'AIR_SYSTEM_DELAY','SECURITY_DELAY','AIRLINE_DELAY','LATE_AIRCRAFT_DELAY', 'WEATHER_DELAY', key = delay_type, value = delay_time)
+
+#using FAA def of delay
+faa_delay = filter(flightsdf, ARRIVAL_DELAY >= 15)
+
+airport_delays = faa_delay %>% group_by(DESTINATION_AIRPORT) %>%
+  summarize(total_delays = sum(ARRIVAL_DELAY >= 15))
+
+airportsdf_sf <- left_join(airportsdf_sf, airport_delays, by = c("IATA_CODE" = "DESTINATION_AIRPORT"))
+airport_cent = st_centroid(airportsdf_sf)
+
+tm_shape(state_map) + tm_borders() + tm_shape(airport_cent) + 
+  tm_symbols(col = "total_delays", 
+             size = "total_delays", scale = 2,
+             legend.size.show = F, alpha = 0.5, palette = "viridis")
+
+```
+
+## Airport Mean/Median Delay Minutes
+```{r,include=TRUE}
+#graphing total arrival delays for top 10 airports
+flightsdf_delay1 <- filter(flightsdf, ARRIVAL_DELAY >= 15)
+
+airport_arrival_delay = flightsdf_delay1 %>% group_by(DESTINATION_AIRPORT) %>%
+  summarize(arrival_delay_time_mean = mean(ARRIVAL_DELAY))
+
+airport_arrival_delay_med = flightsdf_delay1 %>% group_by(DESTINATION_AIRPORT) %>%
+  summarize(arrival_delay_time_med = median(ARRIVAL_DELAY))
+
+cat("Mean", mean(airport_arrival_delay$arrival_delay_time_mean))
+cat("Median", median(airport_arrival_delay_med$arrival_delay_time_med))
+
+```
+
+## Busy Airports Recalled
+```{r, include=TRUE}
+top10_airports <- flightsdf %>% group_by(ORIGIN_AIRPORT) %>% 
+  summarise(airport_count = n())
+top10_airports <- merge(x = airportsdf, y = top10_airports, by.x = 'IATA_CODE',
+                        by.y = 'ORIGIN_AIRPORT') %>%
+  arrange(desc(airport_count))
+total = sum(top10_airports$airport_count)
+top10_airports <- slice_max(top10_airports, top10_airports$airport_count, n=10)
+
+ggplot(data = top10_airports, aes(x = AIRPORT, y = airport_count)) + 
+  theme(axis.text.x = element_blank()) +
+  geom_col(aes(fill = AIRPORT)) + ggtitle("10 Busiest Airports by Flights") +
+  xlab("Airport") + ylab("Flights") + guides(fill=guide_legend(title="Airport"))
+```
+
+## Busy Airports Mapped
+```{r, include=TRUE, results='hide', warning=FALSE}
+delay_collapsed = gather(busy_airports, 'ARRIVAL_DELAY', 'AIR_SYSTEM_DELAY','SECURITY_DELAY','AIRLINE_DELAY','LATE_AIRCRAFT_DELAY', 'WEATHER_DELAY', key = delay_type, value = delay_time)
+
+faa_delay = filter(delay_collapsed, delay_time >= 15)
+
+airport_delays = faa_delay %>% group_by(DESTINATION_AIRPORT) %>%
+  summarize(total_delays = sum(delay_time >= 15))
+
+airportsdf_sf <- left_join(airportsdf_sf, airport_delays, by = c("IATA_CODE" = "DESTINATION_AIRPORT"))
+
+#airportsdf_sf2<- drop_na()
+airport_cent = st_centroid(airportsdf_sf)
+
+tm_shape(state_map) + tm_borders() + tm_shape(airport_cent) + 
+  tm_symbols(col = "total_delays.y", 
+             size = "total_delays.y", scale = 2,
+             legend.size.show = F, alpha = 0.5, palette = heat.colors(5))
+```
+
+## Busy Airports Delay Distribution
+```{r, include=TRUE, message=FALSE, results='hide', warning=FALSE}
+busy_airports = flightsdf %>% group_by(DESTINATION_AIRPORT) %>% 
+  filter(DESTINATION_AIRPORT == c('ORD','DFW', 'DEN','IAH','ATL','LAX','LAS','MSP','PHX','SFO'))
+
+ggplot(data = busy_airports, aes(x = ARRIVAL_DELAY)) + geom_histogram(aes(fill = DESTINATION_AIRPORT), bins = 60) + xlim(c(0,300)) + facet_wrap(~DESTINATION_AIRPORT) + ggtitle("10 Busiest Delay Distribution") + xlab("Delay") + ylab("Amount")
+```
+
+## Continued
+```{r, include=TRUE, results='hide', warning=FALSE}
+#flights by airline by month
+ggplot(data = faa_delay, aes(x = MONTH, fill = AIRLINE)) + geom_bar(bins = 12) + facet_wrap(~DESTINATION_AIRPORT) + ggtitle("Flights by Airlines by Month") + xlab("Month") + ylab("Count")
+```
+
+## Arrival Delays by Month
+```{r, include=TRUE}
+#breaks down to have a row for type of delay, and the time in another
+delay_collapsed = gather(busy_airports,'ARRIVAL_DELAY', 'AIR_SYSTEM_DELAY','SECURITY_DELAY','AIRLINE_DELAY','LATE_AIRCRAFT_DELAY', 'WEATHER_DELAY', key = delay_type, value = delay_time)
+
+faa_delay <- filter(delay_collapsed, delay_time >= 15)
+
+#delays by month by airport
+ggplot(data = faa_delay, aes(x = MONTH, color = delay_type)) + geom_freqpoly(bins = 12) + facet_wrap(~DESTINATION_AIRPORT)
+```
+
+## Conclusions and Further Questions
+- Hubs have high volume leaving room for most delays to occur from congestion
+- Delays add up over time, not many large delays, though some airlines have more
+- Delays increase in summer and holiday months
+- Most delays are from something in our control in a way
+- 40% of all flights from these airports
+- ~80% of flights are on time, ~20% are delayed
+- 36% of ALL delays are from the 10 busiest Airports
